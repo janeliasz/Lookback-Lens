@@ -240,6 +240,10 @@ if __name__ == "__main__":
                             return_attentions=True, teacher_forcing_seq=teacher_forcing_ids)
         model_completion, attentions, model_completion_ids = llm.generate(
             input_text, **generate_kwargs)
+
+        torch.save(model_completion, f"model_completion_{idx}.pt")
+        torch.save(attentions, f"attentions_{idx}.pt")
+        torch.save(model_completion_ids, f"model_completion_ids_{idx}.pt")
         
         context_length = attentions[0][0].shape[-1] - extra_prompt_length
         new_token_length = len(attentions)
