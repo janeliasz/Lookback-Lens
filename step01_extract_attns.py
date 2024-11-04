@@ -254,9 +254,16 @@ if __name__ == "__main__":
         lookback_ratio_no_sink = torch.zeros((num_layers, num_heads, new_token_length))
         for i in range(len(attentions)): # iterating over the new tokens length
             for l in range(num_layers):
-                attn_on_context = attentions[i][l][0, :, -1, :context_length].mean(-1)
-                attn_on_new_tokens = attentions[i][l][0, :, -1, context_length:].mean(-1)
-                lookback_ratio[l, :, i] = attn_on_context / (attn_on_context + attn_on_new_tokens)
+                # attn_on_context = attentions[i][l][0, :, -1, :context_length].mean(-1)
+                # attn_on_new_tokens = attentions[i][l][0, :, -1, context_length:].mean(-1)
+
+                attn_on_context = attentions[i][l][0, :, -1, :context_length]
+                avg_attn_on_context = attn_on_context.mean(-1)
+
+                attn_on_new = attentions[i][l][0, :, -1, context_length:context_length+i]
+                avg_attn_on_new = attn_on_new.mean(-1) if attn_on_new.shape[-1] > 0 else torch.zeros(attn_on_new.shape[0]).to(device)
+
+                lookback_ratio[l, :, i] = avg_attn_on_context / (avg_attn_on_context + avg_attn_on_new)
         
         for stop_word in stop_word_list:
             length_to_remove = len(stop_word)
