@@ -229,6 +229,8 @@ if __name__ == "__main__":
     to_save_list = []
     extra_prompt_length = len(llm.tokenizer(f"\n#{data_response_names[args.data_type]}#:")['input_ids']) - 1
     for idx in tqdm(range(len(list_data_dict))):
+        if idx > 0:
+            break
         sample = list_data_dict[idx]
 
         teacher_forcing_ids = torch.tensor([teacher_forcing_dict[sample['data_index']]], device=device) \
@@ -241,7 +243,9 @@ if __name__ == "__main__":
         model_completion, attentions, model_completion_ids = llm.generate(
             input_text, **generate_kwargs)
         
-        context_length = attentions[0][0].shape[-1] - extra_prompt_length
+        # context_length = attentions[0][0].shape[-1] - extra_prompt_length
+        context_length = attentions[0][0].shape[-1]
+        print("CONTEXT_LENGTH", context_length)
         new_token_length = len(attentions)
         num_layers = len(attentions[0])
         num_heads = attentions[0][0].shape[1]

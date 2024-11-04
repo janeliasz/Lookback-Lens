@@ -74,17 +74,18 @@ class LLM:
 
     def generate(self, input_text, max_new_tokens=256, top_p=0.95, top_k=0, temperature=0.8, mode='vanilla', verbose=True, remove_stop_words=False, return_attentions=False, guiding_classifier=None, chunk_size=None, num_candidates=None, conversion_matrix=None, extra_prompt_length=None, teacher_forcing_seq=None, **kwargs):
         with torch.no_grad():
-
+            print("INPUT_TEXT: ", input_text)
             input_ids = self.tokenizer(input_text, return_tensors="pt").input_ids.to(self.device)
             if verbose:
                 print('MODEL INPUT LENGTH: {0}'.format(input_ids.shape[-1]))
             max_len = input_ids.shape[-1] + max_new_tokens
 
             if mode == 'vanilla':
-                outputs = self.model.generate(inputs=input_ids, max_length=max_len, num_return_sequences=1,
-                                    output_scores=True, return_dict_in_generate=True, 
-                                    top_p=top_p, top_k=top_k, temperature=temperature, stopping_criteria=self.stopping_criteria, 
-                                    output_attentions=return_attentions, teacher_forcing_seq=teacher_forcing_seq, **kwargs)
+                # outputs = self.model.generate(inputs=input_ids, max_length=max_len, num_return_sequences=1,
+                #                     output_scores=True, return_dict_in_generate=True, 
+                #                     top_p=top_p, top_k=top_k, temperature=temperature, stopping_criteria=self.stopping_criteria, 
+                #                     output_attentions=return_attentions, teacher_forcing_seq=teacher_forcing_seq, **kwargs)
+                outputs = self.model.generate(input_ids, max_new_tokens=32, output_attentions=True, return_dict_in_generate=True, do_sample=False)
 
             elif mode == 'classifier_guided':
                 outputs = self.model.generate(input_ids, max_length=max_len, num_return_sequences=1,
