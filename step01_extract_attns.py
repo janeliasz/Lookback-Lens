@@ -229,7 +229,7 @@ if __name__ == "__main__":
     to_save_list = []
     extra_prompt_length = len(llm.tokenizer(f"\n#{data_response_names[args.data_type]}#:")['input_ids']) - 1
     for idx in tqdm(range(len(list_data_dict))):
-        if idx > 0:
+        if idx > 1:
             break
         sample = list_data_dict[idx]
 
@@ -246,6 +246,7 @@ if __name__ == "__main__":
         # context_length = attentions[0][0].shape[-1] - extra_prompt_length
         context_length = attentions[0][0].shape[-1]
         print("CONTEXT_LENGTH", context_length)
+        print("EXTRA_PROMPT_LENGTH", extra_prompt_length)
         new_token_length = len(attentions)
         num_layers = len(attentions[0])
         num_heads = attentions[0][0].shape[1]
