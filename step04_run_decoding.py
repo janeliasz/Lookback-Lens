@@ -56,11 +56,18 @@ temperature_config = {
     "arena-hard-200": 0.0,
 }
 
-def load_parquet(file_path, debug=False):
+def load_parquet(file_path, debug=False, parallel=False, total_shard=4, shard_idx=0):
     df = pd.read_parquet(file_path)
 
     if debug:
-        df = df.head(10)
+        df = df.head(100)
+
+    if parallel:
+        chunk_size = len(df) // total_shard
+        start_idx = shard_idx * chunk_size
+        end_idx = (shard_idx + 1) * chunk_size if shard_idx != total_shard - 1 else len(df)
+        df = df.iloc[start_idx:end_idx]
+        print("Parallel mode: shard_idx={}, start_idx={}, end_idx={}".format(shard_idx, start_idx, end_idx), flush=True)
 
     list_data_dict = []
     for idx in range(len(df)):
@@ -318,7 +325,7 @@ if __name__ == "__main__":
     if "nq-open" in fp:
         list_data_dict = load_nq_open(fp, parallel=args.parallel, total_shard=args.total_shard, shard_id=args.shard_id, debug=args.debug, subsample=args.subsample)
     elif "parquet" in fp:
-        list_data_dict = load_parquet(fp, debug=args.debug)
+        list_data_dict = load_parquet(fp, debug=args.debug, parallel=args.parallel, total_shard=args.total_shard, shard_idx=args.shard_id)
     else:
         list_data_dict = load_jsonl(fp, parallel=args.parallel, total_shard=args.total_shard, shard_id=args.shard_id, debug=args.debug, data_type=args.data_type, subsample=args.subsample)
     
