@@ -11,6 +11,7 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from tqdm import tqdm
 import argparse
 import pickle
+import pandas as pd
 
 from generation import LLM
 
@@ -54,6 +55,23 @@ temperature_config = {
     "humanities": 0.1,
     "arena-hard-200": 0.0,
 }
+
+def load_parquet(file_path, debug=False):
+    df = pd.read_parquet(file_path)
+
+    if debug:
+        df = df.head(10)
+
+    list_data_dict = []
+    for idx in range(len(df)):
+        new_item = dict(
+            data_index = df.iloc[idx]['id'],
+            query = df.iloc[idx]['question'],
+            context = df.iloc[idx]['context'],
+        )
+        list_data_dict.append(new_item)
+
+    return list_data_dict
 
 def load_nq_open(file_path, parallel=False, total_shard=8, shard_id=0, debug=False, data_type='nq_open', subsample=None):
     list_data_dict = []
@@ -176,6 +194,56 @@ def build_prompt(context, response, data_type='cnndm', llama2_tokenizer=None):
         input_text_prompt = prompt + response
     return input_text_prompt
 
+SYSTEM_MSG_RAG_SHORT = """
+    You are a helpful assistant. Your job will be to answer questions accurately based on the given context and not your internal knowledge.
+    If you can not answer the question only based on the provided context, return the answer: `Nie mogę udzielić odpowiedzi na to pytanie na podstawie podanego kontekstu`.
+"""
+
+QUERY_INTRO_NO_ANS = """Given the context `CONTEXT` and the query `QUERY` below, please provide an answer `ANSWER` to the question. 
+    `CONTEXT`: {context} 
+
+    `QUERY`: {query}
+
+    `ANSWER`:
+"""
+
+def generate_chat_prompt(messages):
+    prompt = "<s>"
+    for message in messages:
+        role = message.get("role", "user")  # Domyślnie "user"
+        content = message.get("content", "").strip()
+        if role == "system":
+            prompt += f"[INST] <<SYS>>\n{content}\n<</SYS>>\n"
+        elif role == "user":
+            prompt += f"[INST] {content} [/INST] "
+        elif role == "assistant":
+            prompt += f"{content} [/INST]"
+    prompt = prompt.strip()
+    return prompt
+
+def build_hallu_ds_prompt(tokenizer, query, context, has_system_role):
+    user_input = QUERY_INTRO_NO_ANS.format(context=context, query=query)
+
+    messages = []
+
+    if has_system_role:
+        messages.append({"role": "system", "content": SYSTEM_MSG_RAG_SHORT})
+
+    messages = [
+        {
+            "role": "user",
+            "content": (
+                f"{SYSTEM_MSG_RAG_SHORT}{user_input}"
+                if not has_system_role
+                else user_input
+            ),
+        },
+    ]
+
+    prompt = generate_chat_prompt(messages)
+
+    return prompt
+
 
 def set_seed(seed):
     random.seed(seed)
@@ -238,6 +306,8 @@ if __name__ == "__main__":
             args.data_type = 'xsum'
         elif 'mt_bench' in args.data_path:
             args.data_type = 'mt_bench'
+        elif 'hallu-ds' in args.data_path:
+            args.data_type = 'hallu-ds'
         else:
             raise ValueError("Please specify the data type.")
 
@@ -247,6 +317,8 @@ if __name__ == "__main__":
 
     if "nq-open" in fp:
         list_data_dict = load_nq_open(fp, parallel=args.parallel, total_shard=args.total_shard, shard_id=args.shard_id, debug=args.debug, subsample=args.subsample)
+    elif "parquet" in fp:
+        list_data_dict = load_parquet(fp, debug=args.debug)
     else:
         list_data_dict = load_jsonl(fp, parallel=args.parallel, total_shard=args.total_shard, shard_id=args.shard_id, debug=args.debug, data_type=args.data_type, subsample=args.subsample)
     
@@ -300,6 +372,8 @@ if __name__ == "__main__":
         fw = open(output_path, 'w')
     if args.data_type == 'mt_bench':
         extra_prompt_length = len(llm.tokenizer(f"\n\n### Assistant:")['input_ids'])
+    elif args.data_type == 'hallu-ds':
+        extra_prompt_length = len(llm.tokenizer(f"\n\n`ANSWER`: [/INST]")['input_ids']) - 1
     else:
         extra_prompt_length = len(llm.tokenizer(f"\n#{data_response_names[args.data_type]}#:")['input_ids']) - 1
     time_decoding = 0.0
@@ -308,10 +382,12 @@ if __name__ == "__main__":
         if sample['data_index'] in done_indices:
             continue
         
-        if args.data_type != 'mt_bench':
-            input_text = build_prompt(sample['context'], f"\n#{data_response_names[args.data_type]}#:", data_type=args.data_type, llama2_tokenizer=llm.tokenizer)
-        else:
+        if args.data_type == 'mt_bench':
             input_text = sample['context']
+        elif args.data_type == 'hallu-ds':
+            input_text = build_hallu_ds_prompt(llm.tokenizer, sample['query'], sample['context'], has_system_role=True)
+        else:
+            input_text = build_prompt(sample['context'], f"\n#{data_response_names[args.data_type]}#:", data_type=args.data_type, llama2_tokenizer=llm.tokenizer)
         generate_kwargs = dict(max_new_tokens=args.max_new_tokens, 
                                do_sample=args.do_sample, top_p=args.top_p, top_k=args.top_k,
                                temperature=args.temperature, 
@@ -333,6 +409,8 @@ if __name__ == "__main__":
             extra_prompt_length=extra_prompt_length,
             feat_layer=args.feat_layer,
             chunk_size=args.chunk_size, num_candidates=args.num_candidates, **generate_kwargs)
+        print("MODEL CONFIG: ", llm.model.config, flush=True)
+        print("GENERATION CONFIG DIFF DICT: ", llm.model.generation_config.to_diff_dict(), flush=True)
         cropped_model_completion = model_completion
         for stop_word in stop_word_list:
             length_to_remove = len(stop_word)
