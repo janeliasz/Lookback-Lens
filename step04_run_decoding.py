@@ -236,7 +236,7 @@ def build_hallu_ds_prompt(tokenizer, query, context, has_system_role):
     if has_system_role:
         messages.append({"role": "system", "content": SYSTEM_MSG_RAG_SHORT})
 
-    messages = [
+    messages.append(
         {
             "role": "user",
             "content": (
@@ -245,7 +245,7 @@ def build_hallu_ds_prompt(tokenizer, query, context, has_system_role):
                 else user_input
             ),
         },
-    ]
+     )
 
     prompt = generate_chat_prompt(messages)
 
