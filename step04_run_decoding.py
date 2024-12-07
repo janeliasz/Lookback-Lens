@@ -305,7 +305,9 @@ if __name__ == "__main__":
 
     forced_truncate = ('gpt2' in args.model_name)
     if args.data_type is None:
-        if 'cnndm' in args.data_path or 'summ' in args.data_path:
+        if 'hallu-ds' in args.data_path:
+            args.data_type = 'hallu-ds'
+        elif 'cnndm' in args.data_path or 'summ' in args.data_path:
             args.data_type = 'cnndm'
         elif 'nq-open' in args.data_path:
             args.data_type = 'nq'
@@ -313,8 +315,6 @@ if __name__ == "__main__":
             args.data_type = 'xsum'
         elif 'mt_bench' in args.data_path:
             args.data_type = 'mt_bench'
-        elif 'hallu-ds' in args.data_path:
-            args.data_type = 'hallu-ds'
         else:
             raise ValueError("Please specify the data type.")
 
