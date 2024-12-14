@@ -12,6 +12,8 @@ import tiktoken
 
 from generation import LLM
 
+from parquet_helpers import load_parquet, build_hallu_ds_prompt
+
 transformers.logging.set_verbosity(40)
 
 
@@ -193,7 +195,9 @@ if __name__ == "__main__":
     #    in yaml file federate.save_to
     forced_truncate = ('gpt2' in args.model_name)
     if args.data_type is None:
-        if 'cnndm' in args.data_path:
+        if 'hallu-ds' in args.data_path:
+            args.data_type = 'hallu-ds'
+        elif 'cnndm' in args.data_path:
             args.data_type = 'cnndm'
         elif 'nq-open' in args.data_path:
             args.data_type = 'nq'
@@ -206,8 +210,10 @@ if __name__ == "__main__":
     if not os.path.exists(fp):
         raise ValueError(f"Test file {fp} does not exist.")
 
-    if "nq-open" in fp:
+    if "nq-open" in fp: # this is aobut original NQ-open dataset
         list_data_dict = load_nq_open(fp, parallel=args.parallel, total_shard=args.total_shard, shard_id=args.shard_id, debug=args.debug, subsample=args.subsample)
+    elif "parquet" in fp:
+        list_data_dict = load_parquet(fp, debug=args.debug, parallel=args.parallel, total_shard=args.total_shard, shard_idx=args.shard_id)
     else:
         list_data_dict = load_summarization(fp, parallel=args.parallel, total_shard=args.total_shard, shard_id=args.shard_id, debug=args.debug, data_type=args.data_type, subsample=args.subsample)
     
@@ -227,19 +233,29 @@ if __name__ == "__main__":
                 teacher_forcing_dict[data['data_index']] = data['model_completion_ids']
 
     to_save_list = []
-    extra_prompt_length = len(llm.tokenizer(f"\n#{data_response_names[args.data_type]}#:")['input_ids']) - 1
+    if args.data_type == 'hallu-ds':
+        extra_prompt_length = len(llm.tokenizer(f"\n\n`ANSWER`: [/INST]")['input_ids']) - 1
+    else:
+        extra_prompt_length = len(llm.tokenizer(f"\n#{data_response_names[args.data_type]}#:")['input_ids']) - 1
     for idx in tqdm(range(len(list_data_dict))):
         sample = list_data_dict[idx]
 
         teacher_forcing_ids = torch.tensor([teacher_forcing_dict[sample['data_index']]], device=device) \
                                 if args.teacher_forcing_jsonl is not None else None
-        input_text = build_prompt(sample['context'], f"\n#{data_response_names[args.data_type]}#:", data_type=args.data_type)
+        if args.data_type == 'hallu-ds':
+            input_text = build_hallu_ds_prompt(sample['query'], sample['context'], has_system_role=True)
+        else:
+            input_text = build_prompt(sample['context'], f"\n#{data_response_names[args.data_type]}#:", data_type=args.data_type)
         generate_kwargs = dict(max_new_tokens=args.max_new_tokens, 
                                do_sample=args.do_sample, top_p=args.top_p, top_k=args.top_k, 
                                temperature=args.temperature, mode=mode, 
                             return_attentions=True, teacher_forcing_seq=teacher_forcing_ids)
-        model_completion, attentions, model_completion_ids = llm.generate(
-            input_text, **generate_kwargs)
+        try:
+            model_completion, attentions, model_completion_ids = llm.generate(
+                input_text, **generate_kwargs)
+        except Exception as e:
+            print(f"Error in generating for data index {sample['data_index']}. Error: {e}")
+            continue
         
         context_length = attentions[0][0].shape[-1] - extra_prompt_length
         new_token_length = len(attentions)
@@ -267,5 +283,12 @@ if __name__ == "__main__":
             'lookback_ratio': lookback_ratio,
         }
         to_save_list.append(to_save)
-
+    print("MODEL CONFIG: ", llm.model.config, flush=True)
+    print("GENERATION CONFIG DIFF DICT: ", llm.model.generation_config.to_diff_dict(), flush=True)
+    config = {
+        'model_config': llm.model.config.to_dict(),
+        'generation_config_diff_dict': llm.model.generation_config.to_diff_dict()
+    }
+    with open(args.output_path.replace('.pt', '.json'), 'w') as f:
+        json.dump(config, f)
     torch.save(to_save_list, args.output_path)

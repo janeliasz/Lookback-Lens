@@ -1,3 +1,6 @@
 secrets/
 outputs/
 logs/
+data/
+temp/
+step03_inputs/

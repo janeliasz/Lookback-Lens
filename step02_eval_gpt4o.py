@@ -5,6 +5,34 @@ import openai
 import tiktoken
 import torch
 
+import pandas as pd
+
+def load_parquet(file_path, debug=False, parallel=False, total_shard=4, shard_idx=0):
+    df = pd.read_parquet(file_path)
+
+    if debug:
+        df = df.head(100)
+
+    if parallel:
+        chunk_size = len(df) // total_shard
+        start_idx = shard_idx * chunk_size
+        end_idx = (shard_idx + 1) * chunk_size if shard_idx != total_shard - 1 else len(df)
+        df = df.iloc[start_idx:end_idx]
+        print("Parallel mode: shard_idx={}, start_idx={}, end_idx={}".format(shard_idx, start_idx, end_idx), flush=True)
+
+    query_colname = "question" if "question" in df.columns else "query" if "query" in df.columns else None
+    list_data_dict = {}
+    for idx in range(len(df)):
+        new_item = dict(
+            data_index = df.iloc[idx]['id'],
+            query = df.iloc[idx][query_colname],
+            context = df.iloc[idx]['context'],
+            net_response = df.iloc[idx]['answer'],
+        )
+        list_data_dict[df.iloc[idx]['id']] = new_item
+
+    return list_data_dict
+
 # Define the prompt components
 
 data_response_names = {
@@ -138,6 +166,7 @@ def evaluate_response(document, gt_response, response, tokenizer, data_type='sum
     if debug:
         print('-------------------')
         print(prompt)
+        print("***")
         print('\n'+text+'\n')
         print('-------------------', flush=True)
 
@@ -178,7 +207,10 @@ def evaluate_response(document, gt_response, response, tokenizer, data_type='sum
 
 def main(hyp_path, ref_path, output_path, limit=None):
     # Load jsonl files
-    if not 'nq' in ref_path:
+    if ".parquet" in ref_path:
+        data_type = 'nq_open'
+        gold_data = load_parquet(ref_path)
+    elif not 'nq' in ref_path:
         data_type = 'summarization'
         gold_data = load_summarization(ref_path, data_type=data_type)
     else:
@@ -195,7 +227,7 @@ def main(hyp_path, ref_path, output_path, limit=None):
         response_data = torch.load(hyp_path)
         if limit is not None:
             response_data = response_data[:limit]
-        responses = [item['model_completion'] for item in response_data]
+        responses = [{"data_index": item["data_index"], "value": item['model_completion']} for item in response_data]
 
     # Initialize OpenAI API key
     openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -221,11 +253,18 @@ def main(hyp_path, ref_path, output_path, limit=None):
         total = 0
 
         # Evaluate each pair of summaries
-        for idx in range(len(responses)):
-            response = responses[idx]
+        # for idx in range(len(responses)):
+        for response in responses:
+            # response = responses[idx]
+            # assert idx in gold_data, f"Index {idx} not found in data_dict"
+            idx = response['data_index']
+            response = response['value']
             assert idx in gold_data, f"Index {idx} not found in data_dict"
             document = gold_data[idx]['context']
             gt_response = gold_data[idx]['net_response']
+            print("Idx:", idx)
+            print("Document:", document[:50])
+            print("Ground Truth:", gt_response)
 
             if idx in done_dict:
                 fw.write(json.dumps(done_dict[idx]) + '\n')

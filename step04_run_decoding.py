@@ -69,11 +69,12 @@ def load_parquet(file_path, debug=False, parallel=False, total_shard=4, shard_id
         df = df.iloc[start_idx:end_idx]
         print("Parallel mode: shard_idx={}, start_idx={}, end_idx={}".format(shard_idx, start_idx, end_idx), flush=True)
 
+    query_colname = "question" if "question" in df.columns else "query" if "query" in df.columns else None
     list_data_dict = []
     for idx in range(len(df)):
         new_item = dict(
             data_index = df.iloc[idx]['id'],
-            query = df.iloc[idx]['question'],
+            query = df.iloc[idx][query_colname],
             context = df.iloc[idx]['context'],
         )
         list_data_dict.append(new_item)
@@ -411,11 +412,15 @@ if __name__ == "__main__":
             generate_kwargs['temperature'] = temperature
             generate_kwargs['do_sample'] = do_sample
 
-        model_completion, gen_seq = llm.generate(
-            input_text, guiding_classifier=guiding_classifier, conversion_matrix=conversion_matrix, 
-            extra_prompt_length=extra_prompt_length,
-            feat_layer=args.feat_layer,
-            chunk_size=args.chunk_size, num_candidates=args.num_candidates, **generate_kwargs)
+        try:
+            model_completion, gen_seq = llm.generate(
+                input_text, guiding_classifier=guiding_classifier, conversion_matrix=conversion_matrix, 
+                extra_prompt_length=extra_prompt_length,
+                feat_layer=args.feat_layer,
+                chunk_size=args.chunk_size, num_candidates=args.num_candidates, **generate_kwargs)
+        except Exception as e:
+            print(f"Error in decoding: {e}")
+            continue
         print("MODEL CONFIG: ", llm.model.config, flush=True)
         print("GENERATION CONFIG DIFF DICT: ", llm.model.generation_config.to_diff_dict(), flush=True)
         cropped_model_completion = model_completion

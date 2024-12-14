@@ -342,141 +342,131 @@ def main(anno_file_1, attn_file_1, anno_file_2, attn_file_2,
          two_fold=False,
          conversion=None,
          tokenizer_name=None,
-         output_path=None,
+         clf_output_path=None,
+         results_output_path=None,
          auth_token=None
         ):
-    comb1 = (anno_file_1, attn_file_1, anno_file_2, attn_file_2)
-    comb2 = (anno_file_2, attn_file_2, anno_file_1, attn_file_1)
-    if conversion is None:
-        all_combs = [comb1, comb2]
-    else:
-        all_combs = [comb1]
-    output_small_table = []
-    output_small_table.append(
-        ['Train AUROC (on A)', 'Test AUROC (on A)', 'Transfer AUROC (on B)']
-    )
-    for anno_file, attn_file, transfer_anno_file, transfer_attn_file in all_combs:
-        print(f"======== Loading data from {anno_file} and {attn_file}...")
-        # load data
-        lookback_tensor, labels = load_files(
-            anno_file, attn_file, predefined_span=predefined_span,
-            is_feat=is_feat, feat_layer=feat_layer, tokenizer_name=tokenizer_name, auth_token=auth_token)
-        if not predefined_span:
-            lookback_tensor, labels = convert_to_token_level(
-                lookback_tensor, labels, sliding_window=sliding_window, sequential=True, min_pool_target=True)
 
-        # Extract features from the time series
-        time_series_features, feature_names, baseline_predictions = extract_time_series_features(lookback_tensor)
+    print(f"======== Loading data from {anno_file_1} and {attn_file_1}...")
+    # load data
+    lookback_tensor, labels = load_files(
+        anno_file_1, attn_file_1, predefined_span=predefined_span,
+        is_feat=is_feat, feat_layer=feat_layer, tokenizer_name=tokenizer_name, auth_token=auth_token)
+    if not predefined_span:
+        lookback_tensor, labels = convert_to_token_level(
+            lookback_tensor, labels, sliding_window=sliding_window, sequential=True, min_pool_target=True)
 
-        # Baseline prediction AUROC
-        baseline_auroc = roc_auc_score(labels, baseline_predictions)
-        print("A trivial baseline: if higher lookback ratio means less hallucination.")
-        print(f"Baseline AUROC: {baseline_auroc:.9f}")
+    # Extract features from the time series
+    time_series_features, feature_names, baseline_predictions = extract_time_series_features(lookback_tensor)
 
-        total_train_auroc = 0
-        total_test_auroc = 0
-        if conversion is None:
-            # Train-test split
-            if two_fold:
-                X_train, X_test, y_train, y_test = train_test_split(
-                    time_series_features, labels, test_size=0.5, random_state=42)
-                datasets = [(X_train, y_train, X_test, y_test), (X_test, y_test, X_train, y_train)]
-            else:
-                X_train, X_test, y_train, y_test = train_test_split(
-                    time_series_features, labels, test_size=0.2, random_state=42)
-                datasets = [(X_train, y_train, X_test, y_test)]
+    # Baseline prediction AUROC
+    baseline_auroc = roc_auc_score(labels, baseline_predictions)
+    print("A trivial baseline: if higher lookback ratio means less hallucination.")
+    print(f"Baseline AUROC: {baseline_auroc:.9f}")
 
-            for X_train, y_train, X_test, y_test in datasets:
-                classifier = LogisticRegression(max_iter=1000)
-                classifier.fit(X_train, y_train)
-
-                # Train AUROC
-                y_pred_proba = classifier.predict_proba(X_train)[:, 1]
-                train_auroc = roc_auc_score(y_train, y_pred_proba)
-                total_train_auroc += train_auroc
-
-                print(
-                    f"Train AUROC of the classifier: {train_auroc:.9f}")
-
-                # Evaluate AUROC
-                y_pred_proba = classifier.predict_proba(X_test)[:, 1]
-                auroc = roc_auc_score(y_test, y_pred_proba)
-                total_test_auroc += auroc
-
-                print(
-                    f"Test AUROC of the classifier: {auroc:.9f}")
-
-                # Feature importance
-                if not hasattr(classifier, 'coef_'):
-                    feature_importance = classifier.feature_importances_
-                    important_features = sorted(
-                        zip(feature_names, feature_importance), key=lambda x: x[1], reverse=True)
-                else:
-                    feature_importance = classifier.coef_[0]
-                    important_features = sorted(
-                        zip(feature_names, feature_importance), key=lambda x: abs(x[1]), reverse=True)
-
-                print("Top-10 important features:")
-                for feature, importance in important_features[:10]:
-                    print(f"{feature}: {importance:.9f}")
-
-            total_train_auroc /= len(datasets)
-            total_test_auroc /= len(datasets)
-
-        # Train a classifier on 100% of the data
-        classifier = LogisticRegression(max_iter=1000)
-        classifier.fit(time_series_features, labels)
-
-        y_pred_proba = classifier.predict_proba(time_series_features)[:, 1]
-
-        # save classifier
-        prediction_level = (f'sliding_window_{sliding_window}' if not predefined_span else 'predefined_span')
-        if is_feat:
-            prediction_level += f'_feat_{feat_layer}'
-
-        basename = anno_file.split('/')[-1].replace('.jsonl', '')
-        output_file = f"classifier_{basename}_{prediction_level}.pkl"
-        if output_path is not None:
-            output_file = os.path.join(output_path, output_file)
-        with open(output_file, 'wb') as f:
-            pickle.dump({'clf': classifier}, f)
-
-        # Transfer the classifier to the other dataset
-        print(
-            f"======== Transfer to data from {transfer_anno_file} and {transfer_attn_file}...")
-        transfer_lookback_tensor, transfer_labels = load_files(
-            transfer_anno_file, transfer_attn_file, predefined_span=predefined_span,
-            is_feat=is_feat, feat_layer=feat_layer, tokenizer_name=tokenizer_name)
-        if not predefined_span:
-            transfer_lookback_tensor, transfer_labels = convert_to_token_level(
-                transfer_lookback_tensor, transfer_labels, sliding_window=sliding_window, sequential=True, min_pool_target=True)
-        transfer_time_series_features, transfer_feature_names, transfer_baseline_predictions = extract_time_series_features(transfer_lookback_tensor)
-        # Baseline prediction AUROC
-        transfer_auroc = roc_auc_score(
-            transfer_labels, transfer_baseline_predictions)
-        print("A trivial baseline: if higher lookback ratio means less hallucination.")
-        print(f"Transfer Baseline AUROC: {transfer_auroc:.9f}")
-        if conversion is not None:
-            weight = conversion['weights_matrix']
-            bias = conversion['intercepts']
-            transfer_time_series_features = (torch.tensor(transfer_time_series_features) @ weight.T + bias).numpy()
-        y_pred = classifier.predict(transfer_time_series_features)
-        y_pred_proba = classifier.predict_proba(
-            transfer_time_series_features)[:, 1]
-        transfer_auroc = roc_auc_score(transfer_labels, y_pred_proba)
-        print(
-            f"Transfer AUROC of the classifier: {transfer_auroc:.9f}")
-        # make a output table in csv format for all the scores recorded
-        output_small_table.append(
-            [total_train_auroc, total_test_auroc, transfer_auroc]
-        )
-    print("======== Results:")
     file_1 = anno_file_1.split('/')[-1].replace('.jsonl', '').replace('anno-', '')
     file_2 = anno_file_2.split('/')[-1].replace('.jsonl', '').replace('anno-', '')
-    width = len(f'A={file_1};B={file_2}')
-    names = [' '*width, f'A={file_1};B={file_2}', f'A={file_2};B={file_1}']
-    for i, row in enumerate(output_small_table):
-        print(', '.join([names[i]]+[str(x) for x in row]))
+
+    results = {
+        "A": file_1,
+        "B": file_2,
+    }
+
+    if conversion is None:
+        for train_size, test_size in [(0.8, 0.2), (0.5, 0.5)]:
+            # Train-test split
+            X_train, X_test, y_train, y_test = train_test_split(
+                    time_series_features, labels, test_size=test_size, random_state=42)
+
+            classifier = LogisticRegression(max_iter=1000)
+            classifier.fit(X_train, y_train)
+
+            # Train AUROC
+            y_pred_proba = classifier.predict_proba(X_train)[:, 1]
+            train_auroc = roc_auc_score(y_train, y_pred_proba)
+            results[f"train_auroc_{train_size}_{test_size}"] = train_auroc
+
+            print(
+                f"Train AUROC of the classifier: {train_auroc:.9f}")
+
+            # Evaluate AUROC
+            y_pred_proba = classifier.predict_proba(X_test)[:, 1]
+            test_auroc = roc_auc_score(y_test, y_pred_proba)
+            results[f"test_auroc_{train_size}_{test_size}"] = test_auroc
+
+            print(
+                f"Test AUROC of the classifier: {test_auroc:.9f}")
+
+            # Feature importance
+            if not hasattr(classifier, 'coef_'):
+                feature_importance = classifier.feature_importances_
+                important_features = sorted(
+                    zip(feature_names, feature_importance), key=lambda x: x[1], reverse=True)
+            else:
+                feature_importance = classifier.coef_[0]
+                important_features = sorted(
+                    zip(feature_names, feature_importance), key=lambda x: abs(x[1]), reverse=True)
+
+            print("Top-10 important features:")
+            for feature, importance in important_features[:10]:
+                print(f"{feature}: {importance:.9f}")
+
+    # Train a classifier on 100% of the data
+    classifier = LogisticRegression(max_iter=1000)
+    classifier.fit(time_series_features, labels)
+
+    y_pred_proba = classifier.predict_proba(time_series_features)[:, 1]
+
+    # save classifier
+    if clf_output_path is None:
+        clf_output_path = "clf_" + anno_file_1.replace('.jsonl', '.pkl')
+
+    clf_output_path_folder = clf_output_path.rsplit('/', 1)[0]
+    if not os.path.exists(clf_output_path_folder):
+        os.makedirs(clf_output_path_folder)
+
+    with open(clf_output_path, 'wb') as f:
+        pickle.dump({'clf': classifier}, f)
+
+    # Transfer the classifier to the other dataset
+    print(
+        f"======== Transfer to data from {anno_file_2} and {attn_file_2}...")
+    transfer_lookback_tensor, transfer_labels = load_files(
+        anno_file_2, attn_file_2, predefined_span=predefined_span,
+        is_feat=is_feat, feat_layer=feat_layer, tokenizer_name=tokenizer_name)
+    if not predefined_span:
+        transfer_lookback_tensor, transfer_labels = convert_to_token_level(
+            transfer_lookback_tensor, transfer_labels, sliding_window=sliding_window, sequential=True, min_pool_target=True)
+    transfer_time_series_features, transfer_feature_names, transfer_baseline_predictions = extract_time_series_features(transfer_lookback_tensor)
+    # Baseline prediction AUROC
+    transfer_auroc = roc_auc_score(
+        transfer_labels, transfer_baseline_predictions)
+    print("A trivial baseline: if higher lookback ratio means less hallucination.")
+    print(f"Transfer Baseline AUROC: {transfer_auroc:.9f}")
+    if conversion is not None:
+        weight = conversion['weights_matrix']
+        bias = conversion['intercepts']
+        transfer_time_series_features = (torch.tensor(transfer_time_series_features) @ weight.T + bias).numpy()
+    y_pred = classifier.predict(transfer_time_series_features)
+    y_pred_proba = classifier.predict_proba(
+        transfer_time_series_features)[:, 1]
+    transfer_auroc = roc_auc_score(transfer_labels, y_pred_proba)
+    results['transfer_auroc'] = transfer_auroc
+    print(
+        f"Transfer AUROC of the classifier: {transfer_auroc:.9f}")
+
+    if results_output_path is None:
+        results_output_path = "results_clf_" + anno_file_1.replace('.jsonl', '.json')
+
+    results_output_path_folder = results_output_path.rsplit('/', 1)[0]
+    if not os.path.exists(results_output_path_folder):
+        os.makedirs(results_output_path_folder)
+
+    results_output_file_exists = os.path.exists(results_output_path)
+
+    with open(results_output_path, 'a' if results_output_file_exists else 'w', encoding='utf-8') as f:
+        json_line = json.dumps(results)
+        f.write(json_line + '\n')
 
 
 if __name__ == "__main__":
@@ -504,7 +494,8 @@ if __name__ == "__main__":
     # conversion_matrix
     parser.add_argument('--conversion_matrix', type=str, default=None)
     # output path
-    parser.add_argument('--output_path', type=str, default=None)
+    parser.add_argument('--clf_output_path', type=str, default=None)
+    parser.add_argument('--results_output_path', type=str, default=None)
     parser.add_argument('--auth_token', type=str, default=None)
 
     args = parser.parse_args()
@@ -516,7 +507,7 @@ if __name__ == "__main__":
     sliding_window = args.sliding_window
     is_feat = args.feat
     feat_layer = args.feat_layer
-    two_fold = True
+    two_fold = False
 
     if args.model == '7b':
         num_heads = 32
@@ -537,6 +528,7 @@ if __name__ == "__main__":
         two_fold=two_fold,
         conversion=conversion,
         tokenizer_name=args.tokenizer_name,
-        output_path=args.output_path,
+        clf_output_path=args.clf_output_path,
+        results_output_path=args.results_output_path,
         auth_token=args.auth_token,
     )
